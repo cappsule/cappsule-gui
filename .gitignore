@@ -1,0 +1,5 @@
+*.o
+*.so
+agent-linux/guiclient
+daemon/guiserver
+

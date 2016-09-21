@@ -1,0 +1,782 @@
+diff --git a/src/core/display.c b/src/core/display.c
+index 4686920..9778129 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -170,6 +170,8 @@ static void    sanity_check_timestamps   (MetaDisplay *display,
+ 
+ MetaGroup*     get_focussed_group (MetaDisplay *display);
+ 
++extern guint is_cappsule_window(Display *display, Window xwindow);
++
+ /**
+  * Destructor for MetaPingData structs. Will destroy the
+  * event source for the struct as well.
+@@ -4114,6 +4116,7 @@ process_request_frame_extents (MetaDisplay    *display,
+ 
+   MotifWmHints *hints = NULL;
+   gboolean hints_set = FALSE;
++  guint cappsule_window;
+ 
+   meta_verbose ("Setting frame extents for 0x%lx\n", xwindow);
+ 
+@@ -4142,6 +4145,9 @@ process_request_frame_extents (MetaDisplay    *display,
+           return;
+         }
+ 
++      cappsule_window = is_cappsule_window(display,
++                                           event->xclient.window);
++
+       /* Return estimated frame extents for a normal window. */
+       meta_ui_theme_get_frame_borders (screen->ui,
+                                        META_FRAME_TYPE_NORMAL,
+@@ -4149,7 +4155,8 @@ process_request_frame_extents (MetaDisplay    *display,
+                                        &top,
+                                        &bottom,
+                                        &left,
+-                                       &right);
++                                       &right,
++                                       cappsule_window);
+ 
+       data[0] = left;
+       data[1] = right;
+diff --git a/src/core/frame.c b/src/core/frame.c
+index 19955cd..152f0b7 100644
+--- a/src/core/frame.c
++++ b/src/core/frame.c
+@@ -42,12 +42,15 @@
+                     FocusChangeMask |                              \
+                     ColormapChangeMask)
+ 
++extern guint is_cappsule_window(Display *display, Window xwindow);
++
+ void
+ meta_window_ensure_frame (MetaWindow *window)
+ {
+   MetaFrame *frame;
+   XSetWindowAttributes attrs;
+   Visual *visual;
++  guint cappsule_window;
+   
+   if (window->frame)
+     return;
+@@ -98,6 +101,9 @@ meta_window_ensure_frame (MetaWindow *window)
+   else
+     visual = NULL;
+   
++  cappsule_window = is_cappsule_window(window->display->xdisplay,
++                                       window->xwindow);
++
+   frame->xwindow = meta_ui_create_frame_window (window->screen->ui,
+                                                 window->display->xdisplay,
+                                                 visual,
+@@ -105,7 +111,8 @@ meta_window_ensure_frame (MetaWindow *window)
+                                                 frame->rect.y,
+ 						frame->rect.width,
+ 						frame->rect.height,
+-						frame->window->screen->number);
++						frame->window->screen->number,
++						cappsule_window);
+ 
+   meta_verbose ("Frame for %s is 0x%lx\n", frame->window->desc, frame->xwindow);
+   attrs.event_mask = EVENT_MASK;
+diff --git a/src/core/window.c b/src/core/window.c
+index 2faf64e..16e895b 100644
+--- a/src/core/window.c
++++ b/src/core/window.c
+@@ -197,6 +197,38 @@ maybe_leave_show_desktop_mode (MetaWindow *window)
+     }
+ }
+ 
++guint is_cappsule_window(Display *display, Window xwindow)
++{
++  Atom atom_label;
++  Atom actual_type;
++  int actual_format;
++  unsigned long nitems = 0, bytes_left;
++  unsigned char *data = NULL;
++  guint cappsule_window;
++
++  atom_label = XInternAtom(display, "_QUBES_LABEL", TRUE);
++  if (atom_label == 0) {
++    printf("XInternAtom returned 0\n");
++    return 0;
++  }
++
++  /* XXX: get_property */
++  if ((XGetWindowProperty (display, xwindow, atom_label, 0L, 1L,
++                           FALSE, AnyPropertyType, &actual_type, &actual_format, &nitems,
++                           &bytes_left, &data) != Success))
++    return 0;
++
++  if (nitems == 0 || data == NULL)
++    return 0;
++
++ /* Increment value by one, because caller expects a non-null value for a
++  * cappsule window. */
++  cappsule_window = *(guint *)data + 1;
++  XFree(data);
++
++  return cappsule_window;
++}
++
+ MetaWindow*
+ meta_window_new (MetaDisplay *display,
+                  Window       xwindow,
+diff --git a/src/include/ui.h b/src/include/ui.h
+index 386581e..4e8fb1b 100644
+--- a/src/include/ui.h
++++ b/src/include/ui.h
+@@ -67,7 +67,8 @@ void meta_ui_theme_get_frame_borders (MetaUI *ui,
+                                       int               *top_height,
+                                       int               *bottom_height,
+                                       int               *left_width,
+-                                      int               *right_width);
++                                      int               *right_width,
++                                      guint              cappsule);
+ void meta_ui_get_frame_geometry (MetaUI *ui,
+                                  Window frame_xwindow,
+                                  int *top_height, int *bottom_height,
+@@ -79,7 +80,8 @@ Window meta_ui_create_frame_window (MetaUI *ui,
+ 				    gint y,
+ 				    gint width,
+ 				    gint height,
+-				    gint screen_no);
++				    gint screen_no,
++                                    guint cappsule_window);
+ void meta_ui_destroy_frame_window (MetaUI *ui,
+ 				   Window  xwindow);
+ void meta_ui_move_resize_frame (MetaUI *ui,
+diff --git a/src/ui/frames.c b/src/ui/frames.c
+index be4e781..e8d721a 100644
+--- a/src/ui/frames.c
++++ b/src/ui/frames.c
+@@ -558,7 +558,8 @@ meta_frames_calc_geometry (MetaFrames        *frames,
+                             flags,
+                             width, height,
+                             &button_layout,
+-                            fgeom);
++                            fgeom,
++                            frame->cappsule_window);
+ }
+ 
+ MetaFrames*
+@@ -596,7 +597,8 @@ meta_frames_attach_style (MetaFrames  *frames,
+ void
+ meta_frames_manage_window (MetaFrames *frames,
+                            Window      xwindow,
+-                           GdkWindow  *window)
++                           GdkWindow  *window,
++                           guint       cappsule_window)
+ {
+   MetaUIFrame *frame;
+ 
+@@ -621,6 +623,7 @@ meta_frames_manage_window (MetaFrames *frames,
+   frame->expose_delayed = FALSE;
+   frame->shape_applied = FALSE;
+   frame->prelit_control = META_FRAME_CONTROL_NONE;
++  frame->cappsule_window = cappsule_window;
+ 
+   /* Don't set the window background yet; we need frame->xwindow to be
+    * registered with its MetaWindow, which happens after this function
+@@ -736,7 +739,8 @@ meta_frames_get_geometry (MetaFrames *frames,
+                                 frame->text_height,
+                                 flags,
+                                 top_height, bottom_height,
+-                                left_width, right_width);
++                                left_width, right_width,
++                                frame->cappsule_window);
+ }
+ 
+ void
+@@ -2157,7 +2161,8 @@ populate_cache (MetaFrames *frames,
+                                 frame_type,
+                                 frame->text_height,
+                                 frame_flags,
+-                                &top, &bottom, &left, &right);
++                                &top, &bottom, &left, &right,
++                                frame->cappsule_window);
+ 
+   pixels = get_cache (frames, frame);
+ 
+@@ -2446,7 +2451,8 @@ meta_frames_paint_to_drawable (MetaFrames   *frames,
+ 
+       meta_theme_get_frame_borders (meta_theme_get_current (),
+                              type, frame->text_height, flags, 
+-                             &top, &bottom, &left, &right);
++                             &top, &bottom, &left, &right,
++                             frame->cappsule_window);
+ 
+       meta_core_get (GDK_DISPLAY_XDISPLAY (gdk_display_get_default ()), frame->xwindow,
+                      META_CORE_GET_SCREEN_WIDTH, &screen_width,
+@@ -2504,7 +2510,8 @@ meta_frames_paint_to_drawable (MetaFrames   *frames,
+             frame->text_height,
+             &button_layout,
+             button_states,
+-            mini_icon, icon);
++            mini_icon, icon,
++            frame->cappsule_window);
+ 
+           gdk_window_end_paint (drawable);
+         }
+@@ -2530,7 +2537,8 @@ meta_frames_paint_to_drawable (MetaFrames   *frames,
+                                         frame->text_height,
+                                         &button_layout,
+                                         button_states,
+-                                        mini_icon, icon);
++                                        mini_icon, icon,
++                                        frame->cappsule_window);
+     }
+ 
+ }
+diff --git a/src/ui/frames.h b/src/ui/frames.h
+index ad8d361..87486cc 100644
+--- a/src/ui/frames.h
++++ b/src/ui/frames.h
+@@ -85,6 +85,8 @@ struct _MetaUIFrame
+   
+   /* FIXME get rid of this, it can just be in the MetaFrames struct */
+   MetaFrameControl prelit_control;
++
++  guint cappsule_window;
+ };
+ 
+ struct _MetaFrames
+@@ -117,7 +119,8 @@ MetaFrames *meta_frames_new (int screen_number);
+ 
+ void meta_frames_manage_window (MetaFrames *frames,
+                                 Window      xwindow,
+-				GdkWindow  *window);
++				GdkWindow  *window,
++				guint       cappsule_window);
+ void meta_frames_unmanage_window (MetaFrames *frames,
+                                   Window      xwindow);
+ void meta_frames_set_title (MetaFrames *frames,
+diff --git a/src/ui/preview-widget.c b/src/ui/preview-widget.c
+index 7a7b19f..218b3c2 100644
+--- a/src/ui/preview-widget.c
++++ b/src/ui/preview-widget.c
+@@ -176,7 +176,8 @@ ensure_info (MetaPreview *preview)
+                                         &preview->top_height,
+                                         &preview->bottom_height,
+                                         &preview->left_width,
+-                                        &preview->right_width);
++                                        &preview->right_width,
++                                        0);
+         }
+       else
+         {
+@@ -241,7 +242,8 @@ meta_preview_expose (GtkWidget      *widget,
+                              &preview->button_layout,
+                              button_states,
+                              meta_preview_get_mini_icon (),
+-                             meta_preview_get_icon ());
++                             meta_preview_get_icon (),
++                             0);
+     }
+ 
+   /* draw child */
+diff --git a/src/ui/theme-parser.c b/src/ui/theme-parser.c
+index 1fc1ec5..e910bc7 100644
+--- a/src/ui/theme-parser.c
++++ b/src/ui/theme-parser.c
+@@ -27,6 +27,12 @@
+ #include <string.h>
+ #include <stdlib.h>
+ 
++#define CAPPSULE_THEME_ADDON "<draw_ops name=\"draw_cappsule_border\">" \
++  "<rectangle color=\"red\" filled=\"true\" x=\"0\" y=\"0\" width=\"width\" height=\"height\"/>" \
++  "</draw_ops>"
++
++MetaDrawOpList *cappsule_border_op_list;
++
+ typedef enum
+ {
+   STATE_START,
+@@ -4030,6 +4036,36 @@ text_handler (GMarkupParseContext *context,
+ 
+ #define METACITY_THEME_FILENAME_FORMAT "metacity-theme-%d.xml"
+ 
++static int cappsule_modify_theme(char **rtext, gsize *rlength)
++{
++  char *p, *text;
++  gsize length, n, end_size;
++
++  text = *rtext;
++  length = *rlength;
++
++  n = sizeof(CAPPSULE_THEME_ADDON)-1;
++  text = realloc(text, length + n + 1);
++  if (text == NULL)
++      return -1;
++
++  text[length+n-1] = '\x00';
++
++  p = strstr(text, "</metacity_theme>");
++  if (p == NULL)
++    return -1;
++
++  end_size = (gsize)(text + length - p);
++
++  memmove(p + n, p, end_size);
++  memcpy(p, CAPPSULE_THEME_ADDON, n);
++
++  *rtext = text;
++  *rlength += n;
++
++  return 0;
++}
++
+ MetaTheme*
+ meta_theme_load (const char *theme_name,
+                  GError    **err)
+@@ -4193,8 +4229,16 @@ meta_theme_load (const char *theme_name,
+       return NULL; /* all fallbacks failed */
+     }
+ 
+-  meta_topic (META_DEBUG_THEMES, "Parsing theme file %s\n", theme_file);
++  text = realloc(text, length + sizeof(CAPPSULE_THEME_ADDON) - 1);
++  if (cappsule_modify_theme(&text, &length) != 0)
++    {
++      g_set_error (err, META_THEME_ERROR, META_THEME_ERROR_FAILED,
++          _("cappsule_modify_theme failed\n"));
+ 
++      return NULL; /* all fallbacks failed */
++    }
++
++  meta_topic (META_DEBUG_THEMES, "Parsing theme file %s\n", theme_file);
+ 
+   parse_info_init (&info);
+   info.theme_name = theme_name;
+@@ -4236,6 +4280,7 @@ meta_theme_load (const char *theme_name,
+     }
+   else if (info.theme)
+     {
++      cappsule_border_op_list = meta_theme_lookup_draw_op_list(info.theme, "draw_cappsule_border");
+       /* Steal theme from info */
+       retval = info.theme;
+       info.theme = NULL;
+diff --git a/src/ui/theme-viewer.c b/src/ui/theme-viewer.c
+index ab4a6b5..e000d3a 100644
+--- a/src/ui/theme-viewer.c
++++ b/src/ui/theme-viewer.c
+@@ -971,7 +971,8 @@ run_theme_benchmark (void)
+                                 &top_height,
+                                 &bottom_height,
+                                 &left_width,
+-                                &right_width);
++                                &right_width,
++                                0);
+   
+   layout = create_title_layout (widget);
+   
+@@ -1022,7 +1023,8 @@ run_theme_benchmark (void)
+                              &button_layout,
+                              button_states,
+                              meta_preview_get_mini_icon (),
+-                             meta_preview_get_icon ());
++                             meta_preview_get_icon (),
++                             0);
+ 
+       g_object_unref (G_OBJECT (pixmap));
+       
+diff --git a/src/ui/theme.c b/src/ui/theme.c
+index a5353a6..7bea271 100644
+--- a/src/ui/theme.c
++++ b/src/ui/theme.c
+@@ -95,6 +95,8 @@ static void hls_to_rgb			(gdouble	 *h,
+  */
+ static MetaTheme *meta_current_theme = NULL;
+ 
++extern MetaDrawOpList *cappsule_border_op_list;
++
+ static GdkPixbuf *
+ colorize_pixbuf (GdkPixbuf *orig,
+                  GdkColor  *new_color)
+@@ -406,7 +408,8 @@ meta_frame_layout_get_borders (const MetaFrameLayout *layout,
+                                int                   *top_height,
+                                int                   *bottom_height,
+                                int                   *left_width,
+-                               int                   *right_width)
++                               int                   *right_width,
++                               guint                  cappsule_window)
+ {
+   int buttons_height, title_height;
+   
+@@ -453,6 +456,15 @@ meta_frame_layout_get_borders (const MetaFrameLayout *layout,
+       if (right_width)
+         *right_width = 0;
+     }
++
++  if (cappsule_window) {
++      if (bottom_height)
++        *bottom_height = 3;
++      if (left_width)
++        *left_width = 3;
++      if (right_width)
++        *right_width = 3;
++  }
+ }
+ 
+ static MetaButtonType
+@@ -621,7 +633,8 @@ meta_frame_layout_calc_geometry (const MetaFrameLayout  *layout,
+                                  int                     client_height,
+                                  const MetaButtonLayout *button_layout,
+                                  MetaFrameGeometry      *fgeom,
+-                                 MetaTheme              *theme)
++                                 MetaTheme              *theme,
++                                 guint                   cappsule_window)
+ {
+   int i, n_left, n_right, n_left_spacers, n_right_spacers;
+   int x;
+@@ -646,7 +659,8 @@ meta_frame_layout_calc_geometry (const MetaFrameLayout  *layout,
+                                  &fgeom->top_height,
+                                  &fgeom->bottom_height,
+                                  &fgeom->left_width,
+-                                 &fgeom->right_width);
++                                 &fgeom->right_width,
++                                 cappsule_window);
+ 
+   width = client_width + fgeom->left_width + fgeom->right_width;
+ 
+@@ -4481,6 +4495,35 @@ button_rect (MetaButtonType           type,
+     }
+ }
+ 
++static void
++fix_cappsule_color (MetaDrawOpList *op_list, guint cappsule_window)
++{
++  int i;
++
++  for (i = 0; i < op_list->n_ops; i++)
++    {
++      MetaDrawOp *op = op_list->ops[i];
++
++      if (op->type == META_DRAW_RECTANGLE)
++        {
++          MetaColorSpec *spec = op->data.rectangle.color_spec;
++          if (spec->type == META_COLOR_SPEC_BASIC)
++            {
++              gchar str[32];
++
++              /* cappsule_window was incremented by one to be different than
++               * zero. */
++              cappsule_window--;
++              if (cappsule_window > 0xfff)
++                cappsule_window = 0xfff;
++
++              sprintf (str, "#%03x", cappsule_window);
++              gdk_color_parse (str, &spec->data.basic.color);
++            }
++        }
++    }
++}
++
+ void
+ meta_frame_style_draw_with_style (MetaFrameStyle          *style,
+                                   GtkStyle                *style_gtk,
+@@ -4496,7 +4539,8 @@ meta_frame_style_draw_with_style (MetaFrameStyle          *style,
+                                   int                      text_height,
+                                   MetaButtonState          button_states[META_BUTTON_TYPE_LAST],
+                                   GdkPixbuf               *mini_icon,
+-                                  GdkPixbuf               *icon)
++                                  GdkPixbuf               *icon,
++                                  guint                    cappsule_window)
+ {
+   int i, j;
+   GdkRectangle titlebar_rect;
+@@ -4650,12 +4694,23 @@ meta_frame_style_draw_with_style (MetaFrameStyle          *style,
+ 
+           parent = style;
+           op_list = NULL;
++
+           while (parent && op_list == NULL)
+             {
+               op_list = parent->pieces[i];
+               parent = parent->parent;
+             }
+ 
++          if (cappsule_window > 0 &&
++              (i == META_FRAME_PIECE_LEFT_EDGE ||
++               i == META_FRAME_PIECE_RIGHT_EDGE ||
++               i == META_FRAME_PIECE_BOTTOM_EDGE ||
++               i == META_FRAME_PIECE_TITLEBAR))
++            {
++              op_list = cappsule_border_op_list;
++              fix_cappsule_color (op_list, cappsule_window);
++            }
++
+           if (op_list)
+             {
+               MetaRectangle m_rect;
+@@ -4750,13 +4805,14 @@ meta_frame_style_draw (MetaFrameStyle          *style,
+                        int                      text_height,
+                        MetaButtonState          button_states[META_BUTTON_TYPE_LAST],
+                        GdkPixbuf               *mini_icon,
+-                       GdkPixbuf               *icon)
++                       GdkPixbuf               *icon,
++                       guint                    cappsule_window)
+ {
+   meta_frame_style_draw_with_style (style, gtk_widget_get_style (widget), widget,
+                                     drawable, x_offset, y_offset,
+                                     clip, fgeom, client_width, client_height,
+                                     title_layout, text_height,
+-                                    button_states, mini_icon, icon);
++                                    button_states, mini_icon, icon, cappsule_window);
+ }
+ 
+ MetaShadowProperties *
+@@ -5334,7 +5390,8 @@ meta_theme_draw_frame_with_style (MetaTheme              *theme,
+                                   const MetaButtonLayout *button_layout,
+                                   MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                                   GdkPixbuf              *mini_icon,
+-                                  GdkPixbuf              *icon)
++                                  GdkPixbuf              *icon,
++                                  guint                   cappsule_window)
+ {
+   MetaFrameGeometry fgeom;
+   MetaFrameStyle *style;
+@@ -5353,7 +5410,8 @@ meta_theme_draw_frame_with_style (MetaTheme              *theme,
+                                    client_width, client_height,
+                                    button_layout,
+                                    &fgeom,
+-                                   theme);  
++                                   theme,
++                                   cappsule_window);
+ 
+   meta_frame_style_draw_with_style (style,
+                                     style_gtk,
+@@ -5366,7 +5424,8 @@ meta_theme_draw_frame_with_style (MetaTheme              *theme,
+                                     title_layout,
+                                     text_height,
+                                     button_states,
+-                                    mini_icon, icon);
++                                    mini_icon, icon,
++                                    cappsule_window);
+ }
+ 
+ void
+@@ -5385,14 +5444,15 @@ meta_theme_draw_frame (MetaTheme              *theme,
+                        const MetaButtonLayout *button_layout,
+                        MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                        GdkPixbuf              *mini_icon,
+-                       GdkPixbuf              *icon)
++                       GdkPixbuf              *icon,
++                       guint                   cappsule_window)
+ {
+   meta_theme_draw_frame_with_style (theme, gtk_widget_get_style (widget), widget,
+                                     drawable, clip, x_offset, y_offset, type,flags,
+                                     client_width, client_height,
+                                     title_layout, text_height,
+                                     button_layout, button_states,
+-                                    mini_icon, icon);
++                                    mini_icon, icon, cappsule_window);
+ }
+ 
+ void
+@@ -5411,7 +5471,8 @@ meta_theme_draw_frame_by_name (MetaTheme              *theme,
+                                const MetaButtonLayout *button_layout,
+                                MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                                GdkPixbuf              *mini_icon,
+-                               GdkPixbuf              *icon)
++                               GdkPixbuf              *icon,
++                               guint                   cappsule_window)
+ {
+   MetaFrameGeometry fgeom;
+   MetaFrameStyle *style;
+@@ -5428,7 +5489,8 @@ meta_theme_draw_frame_by_name (MetaTheme              *theme,
+                                    client_width, client_height,
+                                    button_layout,
+                                    &fgeom,
+-                                   theme);  
++                                   theme,
++                                   cappsule_window);
+ 
+   meta_frame_style_draw (style,
+                          widget,
+@@ -5440,7 +5502,8 @@ meta_theme_draw_frame_by_name (MetaTheme              *theme,
+                          title_layout,
+                          text_height,
+                          button_states,
+-                         mini_icon, icon);
++                         mini_icon, icon,
++                         cappsule_window);
+ }
+ 
+ void
+@@ -5451,7 +5514,8 @@ meta_theme_get_frame_borders (MetaTheme      *theme,
+                               int            *top_height,
+                               int            *bottom_height,
+                               int            *left_width,
+-                              int            *right_width)
++                              int            *right_width,
++                              guint           cappsule_window)
+ {
+   MetaFrameStyle *style;
+ 
+@@ -5476,7 +5540,8 @@ meta_theme_get_frame_borders (MetaTheme      *theme,
+                                  text_height,
+                                  flags,
+                                  top_height, bottom_height,
+-                                 left_width, right_width);
++                                 left_width, right_width,
++                                 cappsule_window);
+ }
+ 
+ void
+@@ -5487,7 +5552,8 @@ meta_theme_calc_geometry (MetaTheme              *theme,
+                           int                     client_width,
+                           int                     client_height,
+                           const MetaButtonLayout *button_layout,
+-                          MetaFrameGeometry      *fgeom)
++                          MetaFrameGeometry      *fgeom,
++                          guint                   cappsule_window)
+ {
+   MetaFrameStyle *style;
+ 
+@@ -5505,7 +5571,8 @@ meta_theme_calc_geometry (MetaTheme              *theme,
+                                    client_width, client_height,
+                                    button_layout,
+                                    fgeom,
+-                                   theme);
++                                   theme,
++                                   cappsule_window);
+ }
+ 
+ MetaFrameLayout*
+diff --git a/src/ui/theme.h b/src/ui/theme.h
+index fd254b6..e69e298 100644
+--- a/src/ui/theme.h
++++ b/src/ui/theme.h
+@@ -916,7 +916,8 @@ void             meta_frame_layout_get_borders   (const MetaFrameLayout *layout,
+                                                   int                   *top_height,
+                                                   int                   *bottom_height,
+                                                   int                   *left_width,
+-                                                  int                   *right_width);
++                                                  int                   *right_width,
++                                                  guint                  cappsule_window);
+ void             meta_frame_layout_calc_geometry (const MetaFrameLayout  *layout,
+                                                   int                     text_height,
+                                                   MetaFrameFlags          flags,
+@@ -924,7 +925,8 @@ void             meta_frame_layout_calc_geometry (const MetaFrameLayout  *layout
+                                                   int                     client_height,
+                                                   const MetaButtonLayout *button_layout,
+                                                   MetaFrameGeometry      *fgeom,
+-                                                  MetaTheme              *theme);
++                                                  MetaTheme              *theme,
++                                                  guint                   cappsule_window);
+ 
+ gboolean         meta_frame_layout_validate      (const MetaFrameLayout *layout,
+                                                   GError               **error);
+@@ -1033,7 +1035,8 @@ void meta_frame_style_draw (MetaFrameStyle          *style,
+                             int                      text_height,
+                             MetaButtonState          button_states[META_BUTTON_TYPE_LAST],
+                             GdkPixbuf               *mini_icon,
+-                            GdkPixbuf               *icon);
++                            GdkPixbuf               *icon,
++                            guint                    cappsule_window);
+ 
+ 
+ void meta_frame_style_draw_with_style (MetaFrameStyle          *style,
+@@ -1050,7 +1053,8 @@ void meta_frame_style_draw_with_style (MetaFrameStyle          *style,
+                                        int                      text_height,
+                                        MetaButtonState          button_states[META_BUTTON_TYPE_LAST],
+                                        GdkPixbuf               *mini_icon,
+-                                       GdkPixbuf               *icon);
++                                       GdkPixbuf               *icon,
++                                       guint                    cappsule_window);
+ 
+ MetaShadowProperties * meta_frame_style_get_shadow_properties (MetaFrameStyle *style);
+ MetaInvisibleGrabAreaProperties * meta_frame_style_get_invisible_grab_area_properties (MetaFrameStyle *style);
+@@ -1102,7 +1106,8 @@ void meta_theme_draw_frame (MetaTheme              *theme,
+                             const MetaButtonLayout *button_layout,
+                             MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                             GdkPixbuf              *mini_icon,
+-                            GdkPixbuf              *icon);
++                            GdkPixbuf              *icon,
++                            guint                   cappsule_window);
+ 
+ void meta_theme_draw_frame_by_name (MetaTheme              *theme,
+                                     GtkWidget              *widget,
+@@ -1119,7 +1124,8 @@ void meta_theme_draw_frame_by_name (MetaTheme              *theme,
+                                     const MetaButtonLayout *button_layout,
+                                     MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                                     GdkPixbuf              *mini_icon,
+-                                    GdkPixbuf              *icon);
++                                    GdkPixbuf              *icon,
++                                    guint                   cappsule_window);
+ 
+ void meta_theme_draw_frame_with_style (MetaTheme              *theme,
+                                        GtkStyle               *style_gtk,
+@@ -1137,7 +1143,8 @@ void meta_theme_draw_frame_with_style (MetaTheme              *theme,
+                                        const MetaButtonLayout *button_layout,
+                                        MetaButtonState         button_states[META_BUTTON_TYPE_LAST],
+                                        GdkPixbuf              *mini_icon,
+-                                       GdkPixbuf              *icon);
++                                       GdkPixbuf              *icon,
++                                       guint                   cappsule_window);
+ 
+ void meta_theme_get_frame_borders (MetaTheme         *theme,
+                                    MetaFrameType      type,
+@@ -1146,7 +1153,8 @@ void meta_theme_get_frame_borders (MetaTheme         *theme,
+                                    int               *top_height,
+                                    int               *bottom_height,
+                                    int               *left_width,
+-                                   int               *right_width);
++                                   int               *right_width,
++                                   guint              cappsule_window);
+ void meta_theme_calc_geometry (MetaTheme              *theme,
+                                MetaFrameType           type,
+                                int                     text_height,
+@@ -1154,7 +1162,8 @@ void meta_theme_calc_geometry (MetaTheme              *theme,
+                                int                     client_width,
+                                int                     client_height,
+                                const MetaButtonLayout *button_layout,
+-                               MetaFrameGeometry      *fgeom);
++                               MetaFrameGeometry      *fgeom,
++                               guint                   cappsule_window);
+                                    
+ MetaFrameLayout*   meta_theme_lookup_layout       (MetaTheme         *theme,
+                                                    const char        *name);
+diff --git a/src/ui/ui.c b/src/ui/ui.c
+index fef86af..6b6c987 100644
+--- a/src/ui/ui.c
++++ b/src/ui/ui.c
+@@ -307,7 +307,8 @@ meta_ui_create_frame_window (MetaUI *ui,
+ 			     gint y,
+ 			     gint width,
+ 			     gint height,
+-			     gint screen_no)
++			     gint screen_no,
++                             guint cappsule_window)
+ {
+   GdkDisplay *display = gdk_x11_lookup_xdisplay (xdisplay);
+   GdkScreen *screen = gdk_display_get_screen (display, screen_no);
+@@ -362,7 +363,7 @@ meta_ui_create_frame_window (MetaUI *ui,
+ 
+   gdk_window_resize (window, width, height);
+   
+-  meta_frames_manage_window (ui->frames, GDK_WINDOW_XID (window), window);
++  meta_frames_manage_window (ui->frames, GDK_WINDOW_XID (window), window, cappsule_window);
+ 
+   return GDK_WINDOW_XID (window);
+ }
+@@ -843,7 +844,8 @@ meta_ui_theme_get_frame_borders (MetaUI *ui,
+                                  int               *top_height,
+                                  int               *bottom_height,
+                                  int               *left_width,
+-                                 int               *right_width)
++                                 int               *right_width,
++                                 guint              cappsule_window)
+ {
+   int text_height;
+   PangoContext *context;
+@@ -866,7 +868,8 @@ meta_ui_theme_get_frame_borders (MetaUI *ui,
+       meta_theme_get_frame_borders (meta_theme_get_current (),
+                                     type, text_height, flags,
+                                     top_height, bottom_height,
+-                                    left_width, right_width);
++                                    left_width, right_width,
++                                    cappsule_window);
+     }
+   else
+     {

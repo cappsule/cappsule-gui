@@ -1,0 +1,11 @@
+From http://www.cyberciti.biz/faq/rebuilding-ubuntu-debian-linux-binary-package/
+
+  mkdir sources/ && cd sources/
+  apt-get source metacity
+  sudo apt-get build-dep metacity
+  dpkg-source -x metacity_2.34.13-0ubuntu4.1.dsc
+
+  cd metacity-2.34.13/
+  patch -p1 < ../../metacity-2.34.13.patch
+  dpkg-buildpackage -rfakeroot -b
+  fakeroot debian/rules binary
