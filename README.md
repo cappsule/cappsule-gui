@@ -2,7 +2,7 @@
 
 This repository is part of [Cappsule](https://github.com/cappsule), and contains
 the GUI part. Please refer to the
-[documentation](https://github.com/cappsule/doc/) for more information.
+[documentation](https://github.com/cappsule/cappsule-doc/) for more information.
 
 
 
@@ -26,6 +26,6 @@ between userland and the hypervisor has been modified to use Cappsule's xchan.
 - `qubes-drv/`: fork of
   [Qubes OS agent linux](https://github.com/QubesOS/qubes-gui-agent-linux)
 
-The [hypervisor](https://github.com/cappsule/hypervisor/) and
-[userland](https://github.com/cappsule/userland/) repositories are required to
-build the project because they contain header files.
+The [hypervisor](https://github.com/cappsule/cappsule-hypervisor/) and
+[userland](https://github.com/cappsule/cappsule-userland/) repositories are
+required to build the project because they contain header files.
