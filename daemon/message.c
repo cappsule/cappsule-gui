@@ -336,29 +336,13 @@ static void handle_destroy(Ghandles * g, struct genlist *l)
 	free(vm_window);
 }
 
-/* fix menu window parameters: override_redirect and force to not hide its
- * frame */
-static void fix_menu(Ghandles * g, struct windowdata *vm_window)
-{
-	XSetWindowAttributes attr;
-
-	attr.override_redirect = 1;
-	XChangeWindowAttributes(g->display, vm_window->local_winid,
-				CWOverrideRedirect, &attr);
-	vm_window->override_redirect = 1;
-
-	// do not let menu window hide its color frame by moving outside of the screen
-	// if it is located offscreen, then allow negative x/y
-	if (force_on_screen(g, vm_window, 0, "fix_menu"))
-		moveresize_vm_window(g, vm_window);
-}
-
 /* handle VM message: MSG_MAP
  * Map a window with given parameters */
 static void handle_map(Ghandles * g, struct windowdata *vm_window)
 {
 	struct genlist *trans;
 	struct msg_map_info untrusted_txt;
+	XSetWindowAttributes attr;
 
 	read_struct(g->xchan, untrusted_txt);
 	vm_window->is_mapped = 1;
@@ -372,9 +356,15 @@ static void handle_map(Ghandles * g, struct windowdata *vm_window)
 				     transdata->local_winid);
 	} else
 		vm_window->transient_for = NULL;
-	vm_window->override_redirect = 0;
-	if (untrusted_txt.override_redirect)
-		fix_menu(g, vm_window);
+
+	vm_window->override_redirect = !!(untrusted_txt.override_redirect);
+	attr.override_redirect = vm_window->override_redirect;
+	XChangeWindowAttributes(g->display, vm_window->local_winid,
+	                        CWOverrideRedirect, &attr);
+	if (vm_window->override_redirect
+	    && force_on_screen(g, vm_window, 0, "handle_map"))
+		moveresize_vm_window(g, vm_window);
+
 	(void) XMapWindow(g->display, vm_window->local_winid);
 }
 
